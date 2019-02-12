@@ -14,6 +14,7 @@ evaluateResourceRecords() {
         fqdn=$(echo "${row}" | jq -r '.name')
         # remove trailing "."
         echo "  inspecting ${fqdn%?}..."
+        # get data about content served over 443
         ./site.sh --uri="${fqdn%?}" --quiet
       done
     else
@@ -44,6 +45,9 @@ promptDifferentRecordType() {
   fi
 }
 
+# prompts/collects user input for specifying a hosted zone and specific record set
+# arguments:
+#   - optionally prompt for the hosted zone ID
 userInput() {
   # set zone?
   if [ -n "$1" ] && [ "$1" = "true" ]; then
@@ -61,10 +65,10 @@ userInput() {
 
 currentUserContext=$(aws sts get-caller-identity)
 # display who you are...
-#echo "executing as $(echo ${currentUserContext} | jq -r '.Arn')"
-#echo "now showing zones for account: $(echo ${currentUserContext} | jq '.Account')"
+echo "executing as $(echo ${currentUserContext} | jq -r '.Arn')"
+echo "now showing zones for account: $(echo ${currentUserContext} | jq '.Account')"
 # list domains
-#aws route53 list-hosted-zones --query "HostedZones[*].{id:Id, name:Name, records:ResourceRecordSetCount}" --output table
+aws route53 list-hosted-zones --query "HostedZones[*].{id:Id, name:Name, records:ResourceRecordSetCount}" --output table
 
 echo "from the zones listed above, choose an id; you don't need the \"/hostedzone/\" part"
 # let the user pick the type of records in a particular zone to check

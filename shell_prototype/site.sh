@@ -32,6 +32,7 @@ log() {
 }
 
 printResult() {
+  # need JSON here after prototyping
   echo "  $URI:$PORT|$RESP|$ISSUER|$SUBJECTLINE|$EXPIRATIONDATE|$CERTHASH"
 }
 
