@@ -12,6 +12,39 @@ import(
 )
 
 
+func GetHostedZones(svc *route53.Route53, args *route53.ListHostedZonesInput) ([]*hz, *awsRequest) {
+  var resp *route53.ListHostedZonesOutput
+  var zones []*hz
+  //custom response metadata container
+  req := new(awsRequest)
+
+  //init request metadata
+  req.serviceName = "route53"
+  req.serviceFunction = "ListHostedZones"
+  req.fatalOnError = true
+  //exec api call and handle error
+  resp, req.err = svc.ListHostedZones(args)
+  req.HandleServiceRequestError()
+
+  zones = make([]*hz, len(resp.HostedZones))
+  //hold results in custom struct
+  for i:=0; i<len(resp.HostedZones); i++ {
+    currentZone := resp.HostedZones[i]
+    currentName := string(*currentZone.Name)[:len(*currentZone.Name)-1]
+    z := new(hz)
+
+    //only the last part of the zone id is relevant
+    z.id = strings.Split(*currentZone.Id,"/")[2]
+    //separate out the domain (eg. example.com -> |example|com|)
+    z.domain = strings.Split(currentName, ".")[0]
+    z.tld = strings.Split(currentName, ".")[1]
+    z.recordCount = *currentZone.ResourceRecordSetCount
+    zones[i] = z
+  }
+
+  return zones, req
+}
+
 func HzSort(domainContainers []*hz, sortTarget string) {
   var sorted bool = false
 
@@ -79,62 +112,71 @@ func (container *hz) Serialize() string {
   return jsonString.String()
 }
 
-func main() {
-  var zones []*hz
+//request metadata container
+type awsRequest struct {
+  serviceName string
+  serviceFunction string
+  err error
+  fatalOnError bool
+}
+func (req *awsRequest) HandleServiceRequestError() {
+  if req.err != nil {
+    //spit out the error
+    fmt.Fprintf(os.Stderr, "[Error] calling %s service function %s()...\n%s\n\n", req.serviceName, req.serviceFunction, req.err.Error())
+    //halt if necessary
+    if req.fatalOnError {
+      os.Exit(1)
+    }
+  }
+}
 
+func main() {
   //authentication; using ~/.aws/credentials?
   sess := session.Must(session.NewSession())
-  //service: Route53 and subsequent call to list zones
-  svc := route53.New(sess)
-  params := &route53.ListHostedZonesInput{}
-  //get teh zones
-  resp, err := svc.ListHostedZones(params)
-  if err != nil {
-    fmt.Fprintf(os.Stderr, "[Error] calling service function...\n%s\n\n", err.Error())
-    os.Exit(1)
-  }
+  route53svc := route53.New(sess)
 
-  //hold results in custom struct
-  zones = make([]*hz, len(resp.HostedZones))
-  //fmt.Printf("found %d hosted zones\n", len(resp.HostedZones))
-  for i:=0; i<len(resp.HostedZones); i++ {
-    currentZone := resp.HostedZones[i]
-    currentName := string(*currentZone.Name)[:len(*currentZone.Name)-1]
-    z := new(hz)
-    z.id = strings.Split(*currentZone.Id,"/")[2]
-    z.domain = strings.Split(currentName, ".")[0]
-    z.tld = strings.Split(currentName, ".")[1]
-    z.recordCount = *currentZone.ResourceRecordSetCount
-    zones[i] = z
-  }
-
+  zones, _ := GetHostedZones(route53svc, &route53.ListHostedZonesInput{})
+  //sort for pretty display
   HzSort(zones, "domain")
   HzSort(zones, "tld")
-
-  /*fmt.Println(zones)
-  for _, zone := range zones {
-    fmt.Printf("%+v\n", zone)
-  }
-
-  fmt.Println(zones[0].DomainToString())
-  fmt.Println(zones[18].DomainToString())
-  fmt.Println(zones[0].Serialize())*/
   for _, zone := range zones {
     fmt.Printf("%s (%s), %d records\n", zone.DomainToString(), zone.id, zone.recordCount)
   }
 
+  //TODO: move to function
+  //      read-eval loop?
+  //      arguments?
   //zone selection/inspection
-  params2 := &route53.ListResourceRecordSetsInput{
-    HostedZoneId: aws.String("Z1WIVEZO0APGGA"),
+  var resp *route53.ListResourceRecordSetsOutput
+  var z = aws.String("Z1WIVEZO0APGGA")
+  params := &route53.ListResourceRecordSetsInput{
+    HostedZoneId: z,
     //doesn't work... will just filter in memory (*sigh*)
     //StartRecordName: aws.String("*"),
     //StartRecordType: aws.String("A"),
   }
-  resp2, err2 := svc.ListResourceRecordSets(params2)
-  if err2 != nil {
-    fmt.Fprintf(os.Stderr, "[Error] calling service function...\n%s\n\n", err2.Error())
-    os.Exit(1)
-  }
+  recordsetsRequest := new(awsRequest)
+  recordsetsRequest.serviceName = "route53"
+  recordsetsRequest.serviceFunction = "ListResourceRecordSets"
+  recordsetsRequest.fatalOnError = true
+  resp, recordsetsRequest.err = route53svc.ListResourceRecordSets(params)
+  recordsetsRequest.HandleServiceRequestError()
 
-  fmt.Printf("%+v\n", *resp2)
+  //nfos, prolly not needed
+  fmt.Printf("\nfound %d recordsets for %s\n", len(resp.ResourceRecordSets), *z)
+  //filter based on recordset type; wanted to do it in ListResourceRecordSetsInput...
+  for _, recordset := range resp.ResourceRecordSets {
+    if *recordset.Type == "A" {
+      var recordvals strings.Builder
+      var recordname string = string(*recordset.Name)[:len(*recordset.Name)-1]
+
+      fmt.Printf("%s\n", recordname)
+      //"ResourceRecords" is an array; handle multiple values
+      for _, record := range recordset.ResourceRecords {
+        recordvals.WriteString(*record.Value + "\n")
+      }
+
+      fmt.Println(recordvals.String())
+    }
+  }
 }
