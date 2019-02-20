@@ -12,10 +12,39 @@ import(
 )
 
 
+/*
+ *  using the result returned from the aws api call to list resource recordsets,
+ *  assemble a hash of recordset types
+ */
+func CreateRecordsetTypeHash(recordsets []*route53.ResourceRecordSet) map[string][]*rs {
+  var recs = make(map[string][]*rs)
+
+  //for each recordset returned...
+  for _, recordset := range recordsets {
+    var recordvals strings.Builder
+    currentRecordset := new(rs)
+
+    //lop off the dot at the end of the recordset name
+    currentRecordset.name = string(*recordset.Name)[:len(*recordset.Name)-1]
+    //and parse the resource records (values of the recordset) into a []string
+    for j, rval := range recordset.ResourceRecords {
+      recordvals.WriteString(*rval.Value)
+      if j < len(recordset.ResourceRecords) - 1 {
+        recordvals.WriteString(",")
+      }
+    }
+
+    currentRecordset.values = strings.Split(recordvals.String(), ",")
+    //add recordset to the correct type bucket
+    recs[*recordset.Type] = append(recs[*recordset.Type], currentRecordset)
+  }
+
+  return recs
+}
+
 func GetHostedZones(svc *route53.Route53, args *route53.ListHostedZonesInput) ([]*hz, *awsRequest) {
   var resp *route53.ListHostedZonesOutput
   var zones []*hz
-  //custom response metadata container
   req := new(awsRequest)
 
   //init request metadata
@@ -27,7 +56,7 @@ func GetHostedZones(svc *route53.Route53, args *route53.ListHostedZonesInput) ([
   req.HandleServiceRequestError()
 
   zones = make([]*hz, len(resp.HostedZones))
-  //hold results in custom struct
+  //hold results in custom struct array
   for i:=0; i<len(resp.HostedZones); i++ {
     currentZone := resp.HostedZones[i]
     currentName := string(*currentZone.Name)[:len(*currentZone.Name)-1]
@@ -45,6 +74,44 @@ func GetHostedZones(svc *route53.Route53, args *route53.ListHostedZonesInput) ([
   return zones, req
 }
 
+func GetRecordsetsForZone(svc *route53.Route53, zoneId string, recordType string) *awsRequest {
+  var args = &route53.ListResourceRecordSetsInput{
+    HostedZoneId: aws.String(zoneId),
+    //using the following doesn't work... we'll just filter in memory (*sigh*)
+    //StartRecordName: aws.String("*"),
+    //StartRecordType: aws.String("A"),
+  }
+  var resp *route53.ListResourceRecordSetsOutput
+  req := new(awsRequest)
+
+  //init request metadata
+  req.serviceName = "route53"
+  req.serviceFunction = "ListResourceRecordSets"
+  req.fatalOnError = true
+  //exec api call and handle error
+  resp, req.err = svc.ListResourceRecordSets(args)
+  req.HandleServiceRequestError()
+
+  //in-memory filter
+  recordsByType := CreateRecordsetTypeHash(resp.ResourceRecordSets)
+  //debug-debug-debug-debug-debug-debug-debug-debug-debug-debug
+  //just inspecting formatting options
+  for _, record := range recordsByType[recordType] {
+    fmt.Printf("%s\n", record.name)
+    for _, value := range record.values {
+      fmt.Printf("\t%s\n", value)
+    }
+  }
+  //debug-debug-debug-debug-debug-debug-debug-debug-debug-debug
+
+  //need to also return a filtered recordsets
+  return req
+}
+
+/*
+ *  custom bubble sort for hosted zones; can sort by the domain or tld field for
+ *  an array of hosted zones
+ */
 func HzSort(domainContainers []*hz, sortTarget string) {
   var sorted bool = false
 
@@ -88,6 +155,26 @@ func HzSort(domainContainers []*hz, sortTarget string) {
   } //end sort iteration
 }
 
+/*
+ * represent an array of domains (hz structs) as a serialized json object
+ * should this be a method on a type of []*hz?
+ */
+func SerializeHostedZones(zones []*hz) string {
+  var jsonString strings.Builder
+
+  jsonString.WriteString("{\"domains\":[")
+  for i, zone := range zones {
+    jsonString.WriteString(zone.Serialize())
+    if i < len(zones) - 1 {
+      jsonString.WriteString(",")
+    }
+  }
+
+  jsonString.WriteString("]}")
+
+  return jsonString.String()
+}
+
 //native container for domains; hz=hostedZone
 type hz struct {
   domain string
@@ -103,13 +190,19 @@ func (container *hz) Serialize() string {
 
   //there's got to be a better way...
   jsonString.WriteString("{")
-  jsonString.WriteString("id:" + container.id + ",")
-  jsonString.WriteString("domain:" + container.domain + ",")
-  jsonString.WriteString("tld:" + container.tld + ",")
-  jsonString.WriteString("recordCount:" + strconv.FormatInt(container.recordCount, 10))
+  jsonString.WriteString("\"id\":\"" + container.id + "\",")
+  jsonString.WriteString("\"domain\":\"" + container.domain + "\",")
+  jsonString.WriteString("\"tld\":\"" + container.tld + "\",")
+  jsonString.WriteString("\"recordCount\":" + strconv.FormatInt(container.recordCount, 10))
   jsonString.WriteString("}")
 
   return jsonString.String()
+}
+
+//native container for recordsets associated with a domain; rs=recordset
+type rs struct {
+  name string
+  values []string
 }
 
 //request metadata container
@@ -137,46 +230,16 @@ func main() {
 
   zones, _ := GetHostedZones(route53svc, &route53.ListHostedZonesInput{})
   //sort for pretty display
-  HzSort(zones, "domain")
+  /*HzSort(zones, "domain")
   HzSort(zones, "tld")
   for _, zone := range zones {
     fmt.Printf("%s (%s), %d records\n", zone.DomainToString(), zone.id, zone.recordCount)
-  }
+  }*/
+  fmt.Println(SerializeHostedZones(zones))
 
   //TODO: move to function
   //      read-eval loop?
   //      arguments?
   //zone selection/inspection
-  var resp *route53.ListResourceRecordSetsOutput
-  var z = aws.String("Z1WIVEZO0APGGA")
-  params := &route53.ListResourceRecordSetsInput{
-    HostedZoneId: z,
-    //doesn't work... will just filter in memory (*sigh*)
-    //StartRecordName: aws.String("*"),
-    //StartRecordType: aws.String("A"),
-  }
-  recordsetsRequest := new(awsRequest)
-  recordsetsRequest.serviceName = "route53"
-  recordsetsRequest.serviceFunction = "ListResourceRecordSets"
-  recordsetsRequest.fatalOnError = true
-  resp, recordsetsRequest.err = route53svc.ListResourceRecordSets(params)
-  recordsetsRequest.HandleServiceRequestError()
-
-  //nfos, prolly not needed
-  fmt.Printf("\nfound %d recordsets for %s\n", len(resp.ResourceRecordSets), *z)
-  //filter based on recordset type; wanted to do it in ListResourceRecordSetsInput...
-  for _, recordset := range resp.ResourceRecordSets {
-    if *recordset.Type == "A" {
-      var recordvals strings.Builder
-      var recordname string = string(*recordset.Name)[:len(*recordset.Name)-1]
-
-      fmt.Printf("%s\n", recordname)
-      //"ResourceRecords" is an array; handle multiple values
-      for _, record := range recordset.ResourceRecords {
-        recordvals.WriteString(*record.Value + "\n")
-      }
-
-      fmt.Println(recordvals.String())
-    }
-  }
+  //GetRecordsetsForZone(route53svc, "Z1WIVEZO0APGGA", "A")
 }
