@@ -1,6 +1,7 @@
 package main
 
 import(
+  "flag"
   "fmt"
   "os"
   "strconv"
@@ -42,6 +43,20 @@ func CreateRecordsetTypeHash(recordsets []*route53.ResourceRecordSet) map[string
   return recs
 }
 
+/*
+ * customized usage display
+ */
+func domaniaUsage() {
+  preamble := "This program can be operated in one of two modes: automatable and interactive. Automatable mode\n" +
+              "relies on arguments to query domains and related information. The results of this query is output\n" +
+              "in JSON. Subsequent queries require additional program execution. An interactive mode which prompts\n" +
+              "and awaits input from a user. This mode works well for manual exploration within the data.\n\n" +
+              "Arguments and decriptions are printed below:"
+  fmt.Println(preamble)
+  flag.PrintDefaults()
+  os.Exit(0)
+}
+
 func GetHostedZones(svc *route53.Route53, args *route53.ListHostedZonesInput) ([]*hz, *awsRequest) {
   var resp *route53.ListHostedZonesOutput
   var zones []*hz
@@ -74,7 +89,7 @@ func GetHostedZones(svc *route53.Route53, args *route53.ListHostedZonesInput) ([
   return zones, req
 }
 
-func GetRecordsetsForZone(svc *route53.Route53, zoneId string, recordType string) *awsRequest {
+func GetRecordsetsForZone(svc *route53.Route53, zoneId string, recordType string) ([]*rs, *awsRequest) {
   var args = &route53.ListResourceRecordSetsInput{
     HostedZoneId: aws.String(zoneId),
     //using the following doesn't work... we'll just filter in memory (*sigh*)
@@ -90,22 +105,20 @@ func GetRecordsetsForZone(svc *route53.Route53, zoneId string, recordType string
   req.fatalOnError = true
   //exec api call and handle error
   resp, req.err = svc.ListResourceRecordSets(args)
+  //
+  //what happens if our results are paginated? need to account for this
+  /*
+  if *resp.IsTruncated {
+    fmt.Printf("next record: %s\n", *resp.NextRecordName)
+  }
+  */
+  //
   req.HandleServiceRequestError()
 
   //in-memory filter
   recordsByType := CreateRecordsetTypeHash(resp.ResourceRecordSets)
-  //debug-debug-debug-debug-debug-debug-debug-debug-debug-debug
-  //just inspecting formatting options
-  for _, record := range recordsByType[recordType] {
-    fmt.Printf("%s\n", record.name)
-    for _, value := range record.values {
-      fmt.Printf("\t%s\n", value)
-    }
-  }
-  //debug-debug-debug-debug-debug-debug-debug-debug-debug-debug
 
-  //need to also return a filtered recordsets
-  return req
+  return recordsByType[recordType], req
 }
 
 /*
@@ -175,6 +188,26 @@ func SerializeHostedZones(zones []*hz) string {
   return jsonString.String()
 }
 
+/*
+ * represent an array of domain recordsets (rs structs) as a serialized json
+ * object should this be a method on a type of []*rs?
+ */
+func SerializeRecordsets(recordsets []*rs) string {
+  var jsonString strings.Builder
+
+  jsonString.WriteString("{\"resourceRecords\":[")
+  for i, recordset := range recordsets {
+    jsonString.WriteString(recordset.Serialize())
+    if i < len(recordsets) - 1 {
+      jsonString.WriteString(",")
+    }
+  }
+
+  jsonString.WriteString("]}")
+
+  return jsonString.String()
+}
+
 //native container for domains; hz=hostedZone
 type hz struct {
   domain string
@@ -204,6 +237,16 @@ type rs struct {
   name string
   values []string
 }
+func (container *rs) Serialize() string {
+  var jsonString strings.Builder
+
+  jsonString.WriteString("{")
+  jsonString.WriteString("\"name\":\"" + container.name + "\",")
+  jsonString.WriteString("\"values\":[\"" + strings.Join(container.values, "\",\"") + "\"]")
+  jsonString.WriteString("}")
+
+  return jsonString.String()
+}
 
 //request metadata container
 type awsRequest struct {
@@ -224,22 +267,74 @@ func (req *awsRequest) HandleServiceRequestError() {
 }
 
 func main() {
-  //authentication; using ~/.aws/credentials?
+  var domainId string
+  var resourceRecord string
+
+  //define program arguments
+  //program mode can be: (interactive || automatable)
+  autoMode := flag.Bool("a", false, "mode: automatable and silent; use this option for single queries")
+  flag.StringVar(&domainId, "domain", "", "identifier for a hosted zone")
+  flag.StringVar(&resourceRecord, "type", "", "resource record; DNS record type")
+  flag.Usage = domaniaUsage
+  flag.Parse()
+
+  //initialize access to aws api
   sess := session.Must(session.NewSession())
   route53svc := route53.New(sess)
 
-  zones, _ := GetHostedZones(route53svc, &route53.ListHostedZonesInput{})
-  //sort for pretty display
-  /*HzSort(zones, "domain")
-  HzSort(zones, "tld")
-  for _, zone := range zones {
-    fmt.Printf("%s (%s), %d records\n", zone.DomainToString(), zone.id, zone.recordCount)
-  }*/
-  fmt.Println(SerializeHostedZones(zones))
+  //control flow for modes (see arguments)
+  if !*autoMode {
+    //INTERACTIVE MODE
+    fmt.Println("program running in interactive mode")
+    fmt.Println("fetching domains (hosted zones)...")
+    zones, _ := GetHostedZones(route53svc, &route53.ListHostedZonesInput{})
+    HzSort(zones, "domain")
+    HzSort(zones, "tld")
+    fmt.Printf("found %d domains:\n", len(zones))
+    fmt.Println("ID\t\tdomain and recordset count")
+    fmt.Println("--------------------------------------------")
+    for _, zone := range zones {
+      fmt.Printf("%s\t%s, %d records\n", zone.id, zone.DomainToString(), zone.recordCount)
+    }
 
-  //TODO: move to function
-  //      read-eval loop?
-  //      arguments?
-  //zone selection/inspection
-  //GetRecordsetsForZone(route53svc, "Z1WIVEZO0APGGA", "A")
+    fmt.Println("\nwhich domain? (enter a domain ID)")
+    fmt.Scanf("%s", &domainId)
+    if strings.ToLower(domainId) == "none" || len(domainId) == 0 {
+      fmt.Println("no domain ID specified, exiting")
+      os.Exit(0)
+    }
+
+    fmt.Println("what type of resource record are you looking for?")
+    fmt.Scanf("%s", &resourceRecord)
+    //
+    //need to handle empty input
+    //
+    fmt.Printf("querying now...")
+    recordsets, _ := GetRecordsetsForZone(route53svc, domainId, resourceRecord)
+    fmt.Printf("found %d records:\n", len(recordsets))
+    for _, record := range recordsets {
+      fmt.Printf("%s\n", record.name)
+      for _, value := range record.values {
+        fmt.Printf("\t%s\n", value)
+      }
+    }
+
+    //should the above input iterate until halted by the user?
+  } else {
+    //AUTOMATABLE MODE
+    if len(domainId) == 0 {
+      zones, _ := GetHostedZones(route53svc, &route53.ListHostedZonesInput{})
+      fmt.Println(SerializeHostedZones(zones))
+    } else if len(domainId) > 0 && len(resourceRecord) > 0 {
+      recordsets, _ := GetRecordsetsForZone(route53svc, domainId, resourceRecord)
+      fmt.Println(SerializeRecordsets(recordsets))
+    } else {
+      fmt.Println("insufficient arguments, in automatable mode we need:\n" +
+                  "\tno additional arguments: outputs hosted zones\n" +
+                  "\t-domain and -type: outputs resource records for a hosted zone")
+    }
+  }
+
+  //TODO:
+  //  test domains, check tls and content served
 }
