@@ -81,7 +81,10 @@ func GetHostedZones(svc *route53.Route53, args *route53.ListHostedZonesInput) ([
     z.id = strings.Split(*currentZone.Id,"/")[2]
     //separate out the domain (eg. example.com -> |example|com|)
     z.domain = strings.Split(currentName, ".")[0]
-    z.tld = strings.Split(currentName, ".")[1]
+    if len(strings.Split(currentName, ".")) > 1 {
+      z.tld = strings.Split(currentName, ".")[1]
+    }
+
     z.recordCount = *currentZone.ResourceRecordSetCount
     zones[i] = z
   }
@@ -96,29 +99,31 @@ func GetRecordsetsForZone(svc *route53.Route53, zoneId string, recordType string
     //StartRecordName: aws.String("*"),
     //StartRecordType: aws.String("A"),
   }
+  var moreRecords bool = true
   var resp *route53.ListResourceRecordSetsOutput
   req := new(awsRequest)
+  zoneRecordsets := new(zoneRs)
 
+  zoneRecordsets.types = make(map[string][]*rs)
   //init request metadata
   req.serviceName = "route53"
   req.serviceFunction = "ListResourceRecordSets"
   req.fatalOnError = true
-  //exec api call and handle error
-  resp, req.err = svc.ListResourceRecordSets(args)
-  //
-  //what happens if our results are paginated? need to account for this
-  /*
-  if *resp.IsTruncated {
-    fmt.Printf("next record: %s\n", *resp.NextRecordName)
+  for moreRecords {
+    //exec api call and handle error
+    resp, req.err = svc.ListResourceRecordSets(args)
+    req.HandleServiceRequestError()
+    //in-memory filter
+    zoneRecordsets.HashRecordsetTypes(resp.ResourceRecordSets)
+    if resp != nil && *resp.IsTruncated {
+      args.SetStartRecordName(*resp.NextRecordName)
+      moreRecords = true
+    } else {
+      moreRecords = false
+    }
   }
-  */
-  //
-  req.HandleServiceRequestError()
 
-  //in-memory filter
-  recordsByType := CreateRecordsetTypeHash(resp.ResourceRecordSets)
-
-  return recordsByType[recordType], req
+  return zoneRecordsets.types[recordType], req
 }
 
 /*
@@ -248,6 +253,31 @@ func (container *rs) Serialize() string {
   return jsonString.String()
 }
 
+type zoneRs struct {
+  types map[string][]*rs
+}
+func (zr *zoneRs) HashRecordsetTypes(recordsets []*route53.ResourceRecordSet) {
+  //for each recordset returned...
+  for _, recordset := range recordsets {
+    var recordvals strings.Builder
+    currentRecordset := new(rs)
+
+    //lop off the dot at the end of the recordset name
+    currentRecordset.name = string(*recordset.Name)[:len(*recordset.Name)-1]
+    //and parse the resource records (values of the recordset) into a []string
+    for j, rval := range recordset.ResourceRecords {
+      recordvals.WriteString(*rval.Value)
+      if j < len(recordset.ResourceRecords) - 1 {
+        recordvals.WriteString(",")
+      }
+    }
+
+    currentRecordset.values = strings.Split(recordvals.String(), ",")
+    //add recordset to the correct type bucket
+    zr.types[*recordset.Type] = append(zr.types[*recordset.Type], currentRecordset)
+  }
+}
+
 //request metadata container
 type awsRequest struct {
   serviceName string
@@ -268,7 +298,9 @@ func (req *awsRequest) HandleServiceRequestError() {
 
 func main() {
   var domainId string
+  var moreInput bool = true
   var resourceRecord string
+  var userResponse string
 
   //define program arguments
   //program mode can be: (interactive || automatable)
@@ -297,36 +329,52 @@ func main() {
       fmt.Printf("%s\t%s, %d records\n", zone.id, zone.DomainToString(), zone.recordCount)
     }
 
-    fmt.Println("\nwhich domain? (enter a domain ID)")
-    fmt.Scanf("%s", &domainId)
-    if strings.ToLower(domainId) == "none" || len(domainId) == 0 {
-      fmt.Println("no domain ID specified, exiting")
-      os.Exit(0)
-    }
+    //user's resource record query loop
+    for moreInput {
+      //specify domain (hosted zone) id
+      fmt.Println("\nyou can lookup resource records but I need a domain ID and record type\nwhich domain? (enter a domain ID)")
+      fmt.Scanf("%s", &domainId)
+      if strings.ToLower(domainId) == "none" || len(domainId) == 0 {
+        fmt.Println("no domain ID specified, exiting")
+        os.Exit(0)
+      }
 
-    fmt.Println("what type of resource record are you looking for?")
-    fmt.Scanf("%s", &resourceRecord)
-    //
-    //need to handle empty input
-    //
-    fmt.Printf("querying now...")
-    recordsets, _ := GetRecordsetsForZone(route53svc, domainId, resourceRecord)
-    fmt.Printf("found %d records:\n", len(recordsets))
-    for _, record := range recordsets {
-      fmt.Printf("%s\n", record.name)
-      for _, value := range record.values {
-        fmt.Printf("\t%s\n", value)
+      //specify resource record type
+      fmt.Println("what type of resource record are you looking for?")
+      fmt.Scanf("%s", &resourceRecord)
+      if strings.ToLower(resourceRecord) == "none" || len(resourceRecord) == 0 {
+        fmt.Println("no record type specified, exiting")
+        os.Exit(0)
+      }
+
+      fmt.Printf("querying now...")
+      recordsets, _ := GetRecordsetsForZone(route53svc, domainId, strings.ToUpper(resourceRecord))
+      if len(recordsets) > 0 {
+        fmt.Printf("found %d records:\n", len(recordsets))
+        for _, record := range recordsets {
+          fmt.Printf("%s\n", record.name)
+          for _, value := range record.values {
+            fmt.Printf("\t%s\n", value)
+          }
+        }
+      } else {
+        fmt.Printf("no records found\n")
+      }
+
+      fmt.Printf("continue? ")
+      fmt.Scanf("%s", &userResponse)
+      if strings.ToLower(userResponse) == "no" || strings.ToLower(userResponse) == "n" {
+        moreInput = false
+        fmt.Println("program exiting")
       }
     }
-
-    //should the above input iterate until halted by the user?
   } else {
     //AUTOMATABLE MODE
     if len(domainId) == 0 {
       zones, _ := GetHostedZones(route53svc, &route53.ListHostedZonesInput{})
       fmt.Println(SerializeHostedZones(zones))
     } else if len(domainId) > 0 && len(resourceRecord) > 0 {
-      recordsets, _ := GetRecordsetsForZone(route53svc, domainId, resourceRecord)
+      recordsets, _ := GetRecordsetsForZone(route53svc, domainId, strings.ToUpper(resourceRecord))
       fmt.Println(SerializeRecordsets(recordsets))
     } else {
       fmt.Println("insufficient arguments, in automatable mode we need:\n" +
