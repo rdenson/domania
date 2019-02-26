@@ -80,9 +80,11 @@ func GetHostedZones(svc *route53.Route53, args *route53.ListHostedZonesInput) ([
     //only the last part of the zone id is relevant
     z.id = strings.Split(*currentZone.Id,"/")[2]
     //separate out the domain (eg. example.com -> |example|com|)
-    z.domain = strings.Split(currentName, ".")[0]
     if len(strings.Split(currentName, ".")) > 1 {
+      z.domain = strings.Split(currentName, ".")[0]
       z.tld = strings.Split(currentName, ".")[1]
+    } else {
+      z.domain = currentName
     }
 
     z.recordCount = *currentZone.ResourceRecordSetCount
@@ -109,6 +111,7 @@ func GetRecordsetsForZone(svc *route53.Route53, zoneId string, recordType string
   req.serviceName = "route53"
   req.serviceFunction = "ListResourceRecordSets"
   req.fatalOnError = true
+  //handle paginated
   for moreRecords {
     //exec api call and handle error
     resp, req.err = svc.ListResourceRecordSets(args)
@@ -221,7 +224,11 @@ type hz struct {
   tld string
 }
 func (container *hz) DomainToString() string {
-  return container.domain + "." + container.tld
+  if len(container.tld) > 0 {
+    return container.domain + "." + container.tld
+  } else {
+    return container.domain
+  }
 }
 func (container *hz) Serialize() string {
   var jsonString strings.Builder
