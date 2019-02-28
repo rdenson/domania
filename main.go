@@ -64,7 +64,7 @@ func GetHostedZones(svc *route53.Route53, args *route53.ListHostedZonesInput) ([
   return zones, req
 }
 
-func GetRecordsetsForZone(svc *route53.Route53, zoneId string, recordType string) ([]*rs, *awsRequest) {
+func GetRecordsetsForZone(svc *route53.Route53, zoneId string) (*zoneRs, *awsRequest) {
   var args = &route53.ListResourceRecordSetsInput{
     HostedZoneId: aws.String(zoneId),
     //using the following doesn't work... we'll just filter in memory (*sigh*)
@@ -96,7 +96,7 @@ func GetRecordsetsForZone(svc *route53.Route53, zoneId string, recordType string
     }
   }
 
-  return zoneRecordsets.types[recordType], req
+  return zoneRecordsets, req
 }
 
 /*
@@ -233,6 +233,17 @@ func (container *rs) Serialize() string {
 type zoneRs struct {
   types map[string][]*rs
 }
+func (zr *zoneRs) GetDistinctTypes() []string {
+  var distinceTypes []string = make([]string, len(zr.types))
+  var i int = 0
+
+  for resourceRecordType, _ := range zr.types {
+    distinceTypes[i] = resourceRecordType
+    i++
+  }
+
+  return distinceTypes
+}
 /*
  *  using the result returned from the aws api call to list resource recordsets,
  *  assemble a hash of recordset types
@@ -320,19 +331,20 @@ func main() {
         os.Exit(0)
       }
 
+      //preempt resource recordsets for specified zone
+      zoneRecords, _ := GetRecordsetsForZone(route53svc, domainId)
       //specify resource record type
       fmt.Println("what type of resource record are you looking for?")
+      fmt.Printf("choice of: %s\n", strings.Join(zoneRecords.GetDistinctTypes(), ", "))
       fmt.Scanf("%s", &resourceRecord)
       if strings.ToLower(resourceRecord) == "none" || len(resourceRecord) == 0 {
         fmt.Println("no record type specified, exiting")
         os.Exit(0)
       }
 
-      fmt.Printf("querying now...")
-      recordsets, _ := GetRecordsetsForZone(route53svc, domainId, strings.ToUpper(resourceRecord))
-      if len(recordsets) > 0 {
-        fmt.Printf("found %d records:\n", len(recordsets))
-        for _, record := range recordsets {
+      if len(zoneRecords.types[strings.ToUpper(resourceRecord)]) > 0 {
+        fmt.Printf("found %d records:\n", len(zoneRecords.types[strings.ToUpper(resourceRecord)]))
+        for _, record := range zoneRecords.types[strings.ToUpper(resourceRecord)] {
           fmt.Printf("%s\n", record.name)
           for _, value := range record.values {
             fmt.Printf("\t%s\n", value)
@@ -355,8 +367,8 @@ func main() {
       zones, _ := GetHostedZones(route53svc, &route53.ListHostedZonesInput{})
       fmt.Println(SerializeHostedZones(zones))
     } else if len(domainId) > 0 && len(resourceRecord) > 0 {
-      recordsets, _ := GetRecordsetsForZone(route53svc, domainId, strings.ToUpper(resourceRecord))
-      fmt.Println(SerializeRecordsets(recordsets))
+      zoneRecords, _ := GetRecordsetsForZone(route53svc, domainId)
+      fmt.Println(SerializeRecordsets(zoneRecords.types[strings.ToUpper(resourceRecord)]))
     } else {
       fmt.Println("insufficient arguments, in automatable mode we need:\n" +
                   "\tno additional arguments: outputs hosted zones\n" +
