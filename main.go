@@ -209,9 +209,11 @@ func main() {
   var resourceRecord string
   var userResponse string
 
-  //define program arguments
+  //--- program arguments ---
   //program mode can be: (interactive || automatable)
   autoMode := flag.Bool("a", false, "mode: automatable and silent; use this option for single queries")
+  //investigate content served by domains
+  checkDomainContent := flag.Bool("c", false, "gathers secure protocol information on content served within a domain")
   flag.StringVar(&domainId, "domain", "", "identifier for a hosted zone")
   flag.StringVar(&resourceRecord, "type", "", "resource record; DNS record type")
   flag.Usage = domaniaUsage
@@ -278,16 +280,27 @@ func main() {
     }
   } else {
     //AUTOMATABLE MODE
-    if len(domainId) == 0 {
-      zones, _ := GetHostedZones(route53svc, &route53.ListHostedZonesInput{})
-      fmt.Println(SerializeHostedZones(zones))
-    } else if len(domainId) > 0 && len(resourceRecord) > 0 {
-      zoneRecords, _ := GetRecordsetsForZone(route53svc, domainId)
-      fmt.Println(SerializeRecordsets(zoneRecords.types[strings.ToUpper(resourceRecord)]))
+    if !*checkDomainContent {
+      //--information gathering
+      if len(domainId) == 0 {
+        zones, _ := GetHostedZones(route53svc, &route53.ListHostedZonesInput{})
+        fmt.Println(SerializeHostedZones(zones))
+      } else if len(domainId) > 0 && len(resourceRecord) > 0 {
+        zoneRecords, _ := GetRecordsetsForZone(route53svc, domainId)
+        fmt.Println(SerializeRecordsets(zoneRecords.types[strings.ToUpper(resourceRecord)]))
+      } else {
+        fmt.Println("insufficient arguments, when information gathering:\n" +
+                    "\tno additional arguments: outputs hosted zones\n" +
+                    "\t-domain and -type: outputs resource records for a hosted zone")
+      }
     } else {
-      fmt.Println("insufficient arguments, in automatable mode we need:\n" +
-                  "\tno additional arguments: outputs hosted zones\n" +
-                  "\t-domain and -type: outputs resource records for a hosted zone")
+      //--domain content checks
+      if len(domainId) > 0 {
+        fmt.Println("TODO...")
+      } else {
+        fmt.Println("insufficient arguments, when performing domain content checks:\n" +
+                    "\t-domain argument is required")
+      }
     }
   }
 
