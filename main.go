@@ -14,36 +14,6 @@ import(
 
 
 /*
- *  using the result returned from the aws api call to list resource recordsets,
- *  assemble a hash of recordset types
- */
-func CreateRecordsetTypeHash(recordsets []*route53.ResourceRecordSet) map[string][]*rs {
-  var recs = make(map[string][]*rs)
-
-  //for each recordset returned...
-  for _, recordset := range recordsets {
-    var recordvals strings.Builder
-    currentRecordset := new(rs)
-
-    //lop off the dot at the end of the recordset name
-    currentRecordset.name = string(*recordset.Name)[:len(*recordset.Name)-1]
-    //and parse the resource records (values of the recordset) into a []string
-    for j, rval := range recordset.ResourceRecords {
-      recordvals.WriteString(*rval.Value)
-      if j < len(recordset.ResourceRecords) - 1 {
-        recordvals.WriteString(",")
-      }
-    }
-
-    currentRecordset.values = strings.Split(recordvals.String(), ",")
-    //add recordset to the correct type bucket
-    recs[*recordset.Type] = append(recs[*recordset.Type], currentRecordset)
-  }
-
-  return recs
-}
-
-/*
  * customized usage display
  */
 func domaniaUsage() {
@@ -111,7 +81,7 @@ func GetRecordsetsForZone(svc *route53.Route53, zoneId string, recordType string
   req.serviceName = "route53"
   req.serviceFunction = "ListResourceRecordSets"
   req.fatalOnError = true
-  //handle paginated
+  //handle paginated results
   for moreRecords {
     //exec api call and handle error
     resp, req.err = svc.ListResourceRecordSets(args)
@@ -263,6 +233,10 @@ func (container *rs) Serialize() string {
 type zoneRs struct {
   types map[string][]*rs
 }
+/*
+ *  using the result returned from the aws api call to list resource recordsets,
+ *  assemble a hash of recordset types
+ */
 func (zr *zoneRs) HashRecordsetTypes(recordsets []*route53.ResourceRecordSet) {
   //for each recordset returned...
   for _, recordset := range recordsets {
