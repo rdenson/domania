@@ -280,7 +280,15 @@ func main() {
     }
   } else {
     //AUTOMATABLE MODE
-    if !*checkDomainContent {
+    if *checkDomainContent {
+      //--domain content checks
+      if len(domainId) > 0 {
+        fmt.Println("TODO...")
+      } else {
+        fmt.Println("insufficient arguments, when performing domain content checks:\n" +
+                    "\t-domain argument is required")
+      }
+    } else {
       //--information gathering
       if len(domainId) == 0 {
         zones, _ := GetHostedZones(route53svc, &route53.ListHostedZonesInput{})
@@ -292,14 +300,6 @@ func main() {
         fmt.Println("insufficient arguments, when information gathering:\n" +
                     "\tno additional arguments: outputs hosted zones\n" +
                     "\t-domain and -type: outputs resource records for a hosted zone")
-      }
-    } else {
-      //--domain content checks
-      if len(domainId) > 0 {
-        fmt.Println("TODO...")
-      } else {
-        fmt.Println("insufficient arguments, when performing domain content checks:\n" +
-                    "\t-domain argument is required")
       }
     }
   }
