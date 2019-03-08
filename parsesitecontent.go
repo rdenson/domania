@@ -6,7 +6,10 @@ import (
   "crypto/sha1"
   "fmt"
   "net/http"
-  "os"
+  "net/url"
+  //"os"
+  "strconv"
+  "strings"
   "time"
 )
 
@@ -51,29 +54,182 @@ var tlsVersionsByCode = map[uint16]string{
   0x0304: "VersionTLS13",
 }
 
-func main() {
+func CheckSiteRedirect(r *http.Response) (bool, string) {
+  var redirectedURL string = ""
+  var hasHttps bool = false
+
+  redirectHeaders := r.Header
+  if _, available := redirectHeaders["Location"]; available {
+    parsedLocation, _ := url.Parse(redirectHeaders["Location"][0])
+    redirectedURL = parsedLocation.String()
+    if parsedLocation.Scheme == "https" {
+      hasHttps = true
+    }
+  }
+
+  return hasHttps, redirectedURL
+}
+
+func LoadRequest(site string) (*http.Response, error) {
   tr := &http.Transport{
     MaxIdleConns: 10,
     IdleConnTimeout: 30 * time.Second,
     DisableCompression: true,
   }
 
-  client := &http.Client{Transport: tr}
+  client := &http.Client{
+    Transport: tr,
+    Timeout: 30 * time.Second,
+  }
+  client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+    //just return the initial response
+    return http.ErrUseLastResponse
+  }
+
+  if site[0:4] != "http" {
+    site = "http://" + site
+  }
+
+  req, _ := http.NewRequest("GET", site, nil)
+  req.Close = true
+  return client.Do(req)
+}
+
+type requestResult struct {
+  callError error
+  certExpiration time.Time
+  cipherSuite string
+  redirects bool
+  redirectsToHttps bool
+  site string
+  tlsVersion string
+  responseEncrypted bool
+  certFingerprint string
+
+  rawResponse *http.Response
+}
+func (res *requestResult) GetCertInformation() {
+  var fingerprint strings.Builder
+  if !res.responseEncrypted {
+    return
+  }
+
+  itr := 0
+  certs := res.rawResponse.TLS.PeerCertificates
+  for certs[itr].IsCA {
+    itr++
+  }
+
+  res.certExpiration = certs[itr].NotAfter
+  fpBytes := sha1.Sum(certs[itr].Raw)
+  for i:=0; i<len(fpBytes); i++ {
+    fingerprint.WriteString(strconv.FormatInt(int64(fpBytes[i]), 16))
+    if i < (len(fpBytes) - 1) {
+      fingerprint.WriteString(":")
+    }
+  }
+
+  res.certFingerprint = fingerprint.String()
+}
+func (res *requestResult) Serialize() string {
+  var jsonString strings.Builder
+  var refinedStatus string = "unresponsive"
+
+  if res.rawResponse != nil {
+    refinedStatus = strconv.Itoa(res.rawResponse.StatusCode)
+  }
+
+  jsonString.WriteString("{")
+  jsonString.WriteString("\"site\":\"" + res.site + "\",")
+  jsonString.WriteString("\"status\":" + refinedStatus + ",")
+  jsonString.WriteString("\"redirectsToHttps\":" + strconv.FormatBool(res.redirectsToHttps) + ",")
+  if res.responseEncrypted {
+    jsonString.WriteString("\"cipherSuite\":\"" + res.cipherSuite + "\",")
+    jsonString.WriteString("\"tlsVersion\":\"" + res.tlsVersion + "\",")
+    jsonString.WriteString("\"certFingerprint\":\"" + res.certFingerprint + "\",")
+    jsonString.WriteString("\"certExpiration\":\"" + res.certExpiration.String() + "\",")
+  }
+
+  jsonString.WriteString("\"error\":" + strconv.FormatBool(res.callError != nil))
+  jsonString.WriteString("}")
+
+  return jsonString.String()
+}
+
+func main() {
   //take in some site so we can see what will be returned without recompilation
-  var url string
+  var site string
   fmt.Println("gimmie a url:")
-  fmt.Scanf("%s", &url)
+  fmt.Scanf("%s", &site)
   //-----
-  resp, err := client.Get(url)
+  //  flow:
+  //    site input (without scheme) -> www.example.com || example.com
+  //    make request to http
+  //      check redirect; do we provide a HTTPS location?
+  //    make request to https
+  //      get tls infos
+  rr := new(requestResult)
+  rr.site = site
+  resp, respErr := LoadRequest(site)
+  if respErr == nil && (resp.StatusCode == 301 || resp.StatusCode == 302) {
+    rr.redirects = true
+    isSecure, newSite := CheckSiteRedirect(resp)
+    rr.redirectsToHttps = isSecure
+    if isSecure {
+      resp, respErr = LoadRequest(newSite)
+      //TODO: if we fail here with a cert issue, LoadRequest() with transport -> tls config -> InsecureSkipVerify=true
+      if strings.Contains(respErr.Error(), "x509:") {
+        fmt.Println("retry and skip certificate verification")
+      }
+    }
+  }
+
+  //ok, no redirection... let's try hitting https
+  if !rr.redirects {
+    resp, respErr = LoadRequest("https://" + site)
+    //TODO: if we fail here with a cert issue, LoadRequest() with transport -> tls config -> InsecureSkipVerify=true
+  }
+
+  rr.rawResponse = resp
+  rr.callError = respErr
+  //TODO: create rr.AnalyzeTLS()
+  if resp != nil && resp.TLS != nil {
+    rr.responseEncrypted = true
+    rr.cipherSuite = cipherSuitesByCode[resp.TLS.CipherSuite]
+    rr.tlsVersion = tlsVersionsByCode[resp.TLS.Version]
+  }
+
+  rr.GetCertInformation()
+  fmt.Printf("%+v\n", rr)
+  fmt.Printf("%s\n", rr.Serialize())
+  /*req, _ := http.NewRequest("GET", site, nil)
+  req.Close = true
+  resp, err := client.Do(req)
   if err != nil {
     fmt.Printf("!!error!!\n%+v\n", err)
     os.Exit(1)
   }
 
+  if err == nil && (resp.StatusCode == 301 || resp.StatusCode == 302) {
+    redirectHeaders := resp.Header
+    if _, available := redirectHeaders["Location"]; available {
+      parsedLocation, _ := url.Parse(redirectHeaders["Location"][0])
+      if parsedLocation.Scheme == "https" {
+        req.URL = parsedLocation
+        resp, err = client.Do(req)
+        fmt.Println("<< redirected >>")
+      } else {
+        fmt.Println("<< does not have https equivalent >>")
+      }
+    }
+  } else {
+    fmt.Println("<< no redirection >>")
+  }*/
+
   ////////////////////
-  fmt.Println("received the following> ")
-  fmt.Printf("%s\nstatus: %d\nheaders:\n", resp.Proto, resp.StatusCode)
-  fmt.Printf("content length received: %d\n\n", resp.ContentLength)
+  /*fmt.Println("received the following> ")
+  fmt.Printf("%s\nstatus: %d\ncontent length received: %d\n\n", resp.Proto, resp.StatusCode, resp.ContentLength)
+  fmt.Println("headers:")
   for header, value := range resp.Header {
     fmt.Printf("\t%s: %s\n", header, value)
   }
@@ -101,5 +257,5 @@ func main() {
     }
   } else {
     fmt.Println("site connection is unencrypted")
-  }
+  }*/
 }
