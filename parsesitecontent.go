@@ -4,10 +4,10 @@
 package main
 import (
   "crypto/sha1"
+  "crypto/tls"
   "fmt"
   "net/http"
   "net/url"
-  //"os"
   "strconv"
   "strings"
   "time"
@@ -54,27 +54,33 @@ var tlsVersionsByCode = map[uint16]string{
   0x0304: "VersionTLS13",
 }
 
-func CheckSiteRedirect(r *http.Response) (bool, string) {
-  var redirectedURL string = ""
+func CheckForRedirection(r *http.Response) (bool, bool, string) {
   var hasHttps bool = false
+  var site string = r.Request.URL.String()
+  var redirectFound bool = false
 
-  redirectHeaders := r.Header
-  if _, available := redirectHeaders["Location"]; available {
-    parsedLocation, _ := url.Parse(redirectHeaders["Location"][0])
-    redirectedURL = parsedLocation.String()
-    if parsedLocation.Scheme == "https" {
-      hasHttps = true
+  if r.StatusCode == 301 || r.StatusCode == 302 {
+    redirectFound = true
+    redirectHeaders := r.Header
+    //is there a "Location" header, does it start with "http"?
+    if _, available := redirectHeaders["Location"]; available  && redirectHeaders["Location"][0][0:4] == "http"{
+      //let's see if we're redirecting to something secure
+      redirectedURL, _ := url.Parse(redirectHeaders["Location"][0])
+      site = redirectedURL.String()
+      if redirectedURL.Scheme == "https" {
+        hasHttps = true
+      }
     }
   }
 
-  return hasHttps, redirectedURL
+  return redirectFound, hasHttps, site
 }
 
-func LoadRequest(site string) (*http.Response, error) {
+func UseStandardClient() *http.Client {
   tr := &http.Transport{
-    MaxIdleConns: 10,
-    IdleConnTimeout: 30 * time.Second,
     DisableCompression: true,
+    IdleConnTimeout: 30 * time.Second,
+    MaxIdleConns: 10,
   }
 
   client := &http.Client{
@@ -86,13 +92,43 @@ func LoadRequest(site string) (*http.Response, error) {
     return http.ErrUseLastResponse
   }
 
+  return client
+}
+
+func UseInsecureClient() *http.Client {
+  tr := &http.Transport{
+    DisableCompression: true,
+    IdleConnTimeout: 30 * time.Second,
+    MaxIdleConns: 10,
+    TLSClientConfig: &tls.Config {
+      InsecureSkipVerify: true,
+    },
+  }
+
+  client := &http.Client{
+    Transport: tr,
+    Timeout: 30 * time.Second,
+  }
+  client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+    //just return the initial response
+    return http.ErrUseLastResponse
+  }
+
+  return client
+}
+
+func LoadRequest(site string, requestClient *http.Client) (*http.Response, error) {
   if site[0:4] != "http" {
     site = "http://" + site
   }
 
+  if requestClient == nil {
+    requestClient = UseStandardClient()
+  }
+
   req, _ := http.NewRequest("GET", site, nil)
   req.Close = true
-  return client.Do(req)
+  return requestClient.Do(req)
 }
 
 type requestResult struct {
@@ -108,28 +144,30 @@ type requestResult struct {
 
   rawResponse *http.Response
 }
-func (res *requestResult) GetCertInformation() {
+func (res *requestResult) AnalyzeTLS() {
   var fingerprint strings.Builder
-  if !res.responseEncrypted {
-    return
-  }
+  if res.rawResponse != nil && res.rawResponse.TLS != nil {
+    res.responseEncrypted = true
+    res.cipherSuite = cipherSuitesByCode[res.rawResponse.TLS.CipherSuite]
+    res.tlsVersion = tlsVersionsByCode[res.rawResponse.TLS.Version]
 
-  itr := 0
-  certs := res.rawResponse.TLS.PeerCertificates
-  for certs[itr].IsCA {
-    itr++
-  }
-
-  res.certExpiration = certs[itr].NotAfter
-  fpBytes := sha1.Sum(certs[itr].Raw)
-  for i:=0; i<len(fpBytes); i++ {
-    fingerprint.WriteString(strconv.FormatInt(int64(fpBytes[i]), 16))
-    if i < (len(fpBytes) - 1) {
-      fingerprint.WriteString(":")
+    itr := 0
+    certs := res.rawResponse.TLS.PeerCertificates
+    for certs[itr].IsCA {
+      itr++
     }
-  }
 
-  res.certFingerprint = fingerprint.String()
+    res.certExpiration = certs[itr].NotAfter
+    fpBytes := sha1.Sum(certs[itr].Raw)
+    for i:=0; i<len(fpBytes); i++ {
+      fingerprint.WriteString(strconv.FormatInt(int64(fpBytes[i]), 16))
+      if i < (len(fpBytes) - 1) {
+        fingerprint.WriteString(":")
+      }
+    }
+
+    res.certFingerprint = fingerprint.String()
+  }
 }
 func (res *requestResult) Serialize() string {
   var jsonString strings.Builder
@@ -162,45 +200,34 @@ func main() {
   fmt.Println("gimmie a url:")
   fmt.Scanf("%s", &site)
   //-----
-  //  flow:
-  //    site input (without scheme) -> www.example.com || example.com
-  //    make request to http
-  //      check redirect; do we provide a HTTPS location?
-  //    make request to https
-  //      get tls infos
+
   rr := new(requestResult)
   rr.site = site
-  resp, respErr := LoadRequest(site)
-  if respErr == nil && (resp.StatusCode == 301 || resp.StatusCode == 302) {
-    rr.redirects = true
-    isSecure, newSite := CheckSiteRedirect(resp)
-    rr.redirectsToHttps = isSecure
-    if isSecure {
-      resp, respErr = LoadRequest(newSite)
-      //TODO: if we fail here with a cert issue, LoadRequest() with transport -> tls config -> InsecureSkipVerify=true
-      if strings.Contains(respErr.Error(), "x509:") {
-        fmt.Println("retry and skip certificate verification")
-      }
+  //make request to site (should be with scheme: http)
+  resp, respErr := LoadRequest(rr.site, nil)
+  if respErr == nil {
+    //let's look for a redirect; gather some data when we check
+    rr.redirects, rr.redirectsToHttps, rr.site = CheckForRedirection(resp)
+    if !rr.redirectsToHttps {
+      //ok, no redirection... let's try hitting https with the site inputted
+      rr.site = "https://" + site
     }
+
+    //reload the request, trying to hit https
+    resp, respErr = LoadRequest(rr.site, nil)
   }
 
-  //ok, no redirection... let's try hitting https
-  if !rr.redirects {
-    resp, respErr = LoadRequest("https://" + site)
-    //TODO: if we fail here with a cert issue, LoadRequest() with transport -> tls config -> InsecureSkipVerify=true
+  //error anticipation
+  if respErr != nil && strings.Contains(respErr.Error(), "x509:") {
+    //error mentions something about the cert, hit it again and don't try to verify the cert
+    fmt.Println("retry and skip certificate verification")
+    resp, respErr = LoadRequest(rr.site, UseInsecureClient())
   }
 
+  //set the last response/error now
   rr.rawResponse = resp
   rr.callError = respErr
-  //TODO: create rr.AnalyzeTLS()
-  if resp != nil && resp.TLS != nil {
-    rr.responseEncrypted = true
-    rr.cipherSuite = cipherSuitesByCode[resp.TLS.CipherSuite]
-    rr.tlsVersion = tlsVersionsByCode[resp.TLS.Version]
-  }
-
-  rr.GetCertInformation()
-  fmt.Printf("%+v\n", rr)
+  rr.AnalyzeTLS()
   fmt.Printf("%s\n", rr.Serialize())
   /*req, _ := http.NewRequest("GET", site, nil)
   req.Close = true
