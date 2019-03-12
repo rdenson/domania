@@ -5,7 +5,7 @@ need a portable way to easily see DNS information and check related content. The
 scope is relatively tight:
 * succinctly view domains for a given account
 * report record set values (requested by input)
-* check content served up over TLS
+* check TLS behavior
 
 I don't wanna log into some box to see this info or be constrained by an output
 medium (*excel spreadsheet, email, some special report, etc.*). The output should
