@@ -1,6 +1,3 @@
-/*
- * experimental codeset, will be worked into this project
- */
 package main
 import (
   "crypto/sha1"
@@ -256,6 +253,9 @@ func ParseSite(uri string) string {
   return parseResults.Serialize()
 }
 
+/*
+ * Sends parsed site results to a channel for all of your CSP needs
+ */
 func ChanneledParseSite(uri string, ch chan<- string) {
   ch <- ParseSite(uri)
 }
