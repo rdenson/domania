@@ -5,7 +5,6 @@ package main
 import (
   "crypto/sha1"
   "crypto/tls"
-  "fmt"
   "net/http"
   "net/url"
   "strconv"
@@ -145,13 +144,15 @@ func LoadRequest(site string, insecure bool) (*http.Response, error) {
 type requestResult struct {
   callError error
   certExpiration time.Time
+  certFingerprint string
+  certIssuer string
+  certSubject string
   cipherSuite string
   redirects bool
   redirectsToHttps bool
+  responseEncrypted bool
   site string
   tlsVersion string
-  responseEncrypted bool
-  certFingerprint string
 
   rawResponse *http.Response
 }
@@ -169,6 +170,8 @@ func (res *requestResult) AnalyzeTLS() {
     }
 
     res.certExpiration = certs[itr].NotAfter
+    res.certIssuer = certs[itr].Issuer.String()
+    res.certSubject = certs[itr].Subject.String()
     fpBytes := sha1.Sum(certs[itr].Raw)
     for i:=0; i<len(fpBytes); i++ {
       fingerprint.WriteString(strconv.FormatInt(int64(fpBytes[i]), 16))
@@ -182,24 +185,39 @@ func (res *requestResult) AnalyzeTLS() {
 }
 func (res *requestResult) Serialize() string {
   var jsonString strings.Builder
-  var refinedStatus string = "unresponsive"
+  var refinedStatus int = -1
 
   if res.rawResponse != nil {
-    refinedStatus = strconv.Itoa(res.rawResponse.StatusCode)
+    refinedStatus = res.rawResponse.StatusCode
   }
 
   jsonString.WriteString("{")
   jsonString.WriteString("\"site\":\"" + res.site + "\",")
-  jsonString.WriteString("\"status\":" + refinedStatus + ",")
+  jsonString.WriteString("\"status\":" + strconv.Itoa(refinedStatus) + ",")
   jsonString.WriteString("\"redirectsToHttps\":" + strconv.FormatBool(res.redirectsToHttps) + ",")
   if res.responseEncrypted {
+    //finding some things in the issuer and subject that we need to escape...
+    cleanIssuer := strings.Replace(res.certIssuer, "\\", "\\\\", -1)
+    cleanSubject := strings.Replace(res.certSubject, "\\", "\\\\", -1)
+
     jsonString.WriteString("\"cipherSuite\":\"" + res.cipherSuite + "\",")
     jsonString.WriteString("\"tlsVersion\":\"" + res.tlsVersion + "\",")
-    jsonString.WriteString("\"certFingerprint\":\"" + res.certFingerprint + "\",")
-    jsonString.WriteString("\"certExpiration\":\"" + res.certExpiration.String() + "\",")
+    //placing cert specific datapoint in a separate object
+    jsonString.WriteString("\"cert\":{")
+    jsonString.WriteString("\"issuer\":\"" + cleanIssuer + "\",")
+    jsonString.WriteString("\"subject\":\"" + cleanSubject + "\",")
+    jsonString.WriteString("\"expiration\":\"" + res.certExpiration.String() + "\",")
+    jsonString.WriteString("\"fingerprint\":\"" + res.certFingerprint + "\"")
+    jsonString.WriteString("},")
   }
 
   jsonString.WriteString("\"error\":" + strconv.FormatBool(res.callError != nil))
+  //if there is an error however, plebeian, include during serialization
+  if res.callError != nil {
+    jsonString.WriteString(",")
+    jsonString.WriteString("\"errorMessage\":\"" + res.callError.Error() + "\"")
+  }
+
   jsonString.WriteString("}")
 
   return jsonString.String()
@@ -227,8 +245,7 @@ func ParseSite(uri string) string {
   //error anticipation (request could come from one of the calls above)
   if requestError != nil && strings.Contains(requestError.Error(), "x509:") {
     //error mentions something about the cert, hit it again and don't try to verify the cert
-    fmt.Println("retry and skip certificate verification")
-    response, requestError = LoadRequest(parseResults.site, true)
+    response, requestError = LoadRequest(FormatUrl(parseResults.site, true), true)
   }
 
   //set the last response/error now, we're finished with requests
