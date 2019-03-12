@@ -255,3 +255,7 @@ func ParseSite(uri string) string {
 
   return parseResults.Serialize()
 }
+
+func ChanneledParseSite(uri string, ch chan<- string) {
+  ch <- ParseSite(uri)
+}

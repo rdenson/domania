@@ -283,7 +283,21 @@ func main() {
     if *checkDomainContent {
       //--domain content checks
       if len(domainId) > 0 {
-        fmt.Println("TODO...")
+        zoneRecords, _ := GetRecordsetsForZone(route53svc, domainId)
+        aRecordsForDomain := zoneRecords.types["A"]
+        batch := make(chan string, len(aRecordsForDomain))
+        for i:=0; i<len(aRecordsForDomain); i++ {
+          go ChanneledParseSite(aRecordsForDomain[i].name, batch)
+        }
+
+        fmt.Printf("{\"sites\":[")
+        for j:=0; j<len(aRecordsForDomain); j++ {
+          fmt.Printf("%s", <- batch)
+          if j != len(aRecordsForDomain) - 1 {
+            fmt.Printf(",")
+          }
+        }
+        fmt.Printf("]}")
       } else {
         fmt.Println("insufficient arguments, when performing domain content checks:\n" +
                     "\t-domain argument is required")
