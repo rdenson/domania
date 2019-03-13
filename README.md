@@ -1,4 +1,4 @@
-[![Build Status](https://api.travis-ci.org/rdenson/domania.png?branch=master)](https://travis-ci.org/rdenson/domania)
+[![Build Status](https://travis-ci.org/rdenson/domania.svg?branch=master)](https://travis-ci.org/rdenson/domania)
 
 # Domania
 ## Portable Cloud Domain Inspection
