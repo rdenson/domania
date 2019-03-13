@@ -10,7 +10,7 @@ type mockRedirect struct {
   site string
 }
 
-func CreateTest(url string, httpStatus int, locationIsHttps bool) *mockRedirect {
+func CreateTest(url string, httpStatus int, locationIsHTTPS bool) *mockRedirect {
   testCase := new(mockRedirect)
   fakeRequest, _ := http.NewRequest("GET", url, nil)
 
@@ -21,7 +21,7 @@ func CreateTest(url string, httpStatus int, locationIsHttps bool) *mockRedirect 
     StatusCode: httpStatus,
   }
 
-  if locationIsHttps {
+  if locationIsHTTPS {
     testCase.response.Header.Add("Location", strings.Replace(testCase.site, "http", "https", 1))
   }
 
@@ -33,23 +33,23 @@ func TestCheckForRedirection(t *testing.T) {
   //  1: redirects to https url
   //  2: redirects to non-secure url
   //  2: no redirection and site requested is unchanged
-  var expectedSite string = "http://isthisthesame.net"
+  var expectedSite = "http://isthisthesame.net"
   tc1 := CreateTest("http://somedomain.com", 301, true)
   tc2 := CreateTest("http://somedomain.com", 302, false)
   tc3 := CreateTest(expectedSite, 200, false)
 
-  found, locIsHttp, loc := CheckForRedirection(tc1.response)
-  if !found || !locIsHttp || loc[0:8] != "https://" {
+  found, locIsHTTP, loc := CheckForRedirection(tc1.response)
+  if !found || !locIsHTTP || loc[0:8] != "https://" {
     t.Errorf("tc1 - expected to find a redirect to https url> redirected: %t, headerLocation: %s", found, loc)
   }
 
-  found, locIsHttp, loc = CheckForRedirection(tc2.response)
-  if !found || locIsHttp || loc[0:7] != "http://" {
+  found, locIsHTTP, loc = CheckForRedirection(tc2.response)
+  if !found || locIsHTTP || loc[0:7] != "http://" {
     t.Errorf("tc2 - expected to find a redirect to http url> redirected: %t, headerLocation: %s", found, loc)
   }
 
-  found, locIsHttp, loc = CheckForRedirection(tc3.response)
-  if found || locIsHttp || loc != expectedSite {
+  found, locIsHTTP, loc = CheckForRedirection(tc3.response)
+  if found || locIsHTTP || loc != expectedSite {
     t.Errorf("tc3 - expected not to find a redirect, site should remain the same> redirected: %t, headerLocation: %s", found, loc)
   }
 }

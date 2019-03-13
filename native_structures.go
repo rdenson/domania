@@ -20,9 +20,9 @@ func (z *zone) DomainToString() string {
   if len(z.tld) > 0 {
     //only print domain and tld if we have a tld
     return z.domain + "." + z.tld
-  } else {
-    return z.domain
   }
+
+  return z.domain
 }
 func (z *zone) Serialize() string {
   var jsonString strings.Builder
@@ -75,10 +75,10 @@ func (r *record) Serialize() string {
  */
 type recordset map[string][]*record
 func (rset *recordset) GetDistinctTypes() []string {
-  var distinceTypes []string = make([]string, len(*rset))
-  var i int = 0
+  var distinceTypes = make([]string, len(*rset))
+  var i int
 
-  for resourceRecordType, _ := range *rset {
+  for resourceRecordType := range *rset {
     distinceTypes[i] = resourceRecordType
     i++
   }
