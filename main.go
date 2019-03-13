@@ -26,9 +26,9 @@ func domaniaUsage() {
   os.Exit(0)
 }
 
-func GetHostedZones(svc *route53.Route53, args *route53.ListHostedZonesInput) ([]*hz, *awsRequest) {
+func GetHostedZones(svc *route53.Route53, args *route53.ListHostedZonesInput) ([]*zone, *awsRequest) {
   var resp *route53.ListHostedZonesOutput
-  var zones []*hz
+  var zones []*zone
   req := new(awsRequest)
 
   //init request metadata
@@ -39,12 +39,12 @@ func GetHostedZones(svc *route53.Route53, args *route53.ListHostedZonesInput) ([
   resp, req.err = svc.ListHostedZones(args)
   req.HandleServiceRequestError()
 
-  zones = make([]*hz, len(resp.HostedZones))
+  zones = make([]*zone, len(resp.HostedZones))
   //hold results in custom struct array
   for i:=0; i<len(resp.HostedZones); i++ {
     currentZone := resp.HostedZones[i]
     currentName := string(*currentZone.Name)[:len(*currentZone.Name)-1]
-    z := new(hz)
+    z := new(zone)
 
     //only the last part of the zone id is relevant
     z.id = strings.Split(*currentZone.Id,"/")[2]
@@ -63,7 +63,7 @@ func GetHostedZones(svc *route53.Route53, args *route53.ListHostedZonesInput) ([
   return zones, req
 }
 
-func GetRecordsetsForZone(svc *route53.Route53, zoneId string) (*zoneRs, *awsRequest) {
+func GetRecordsetsForZone(svc *route53.Route53, zoneId string) (*recordset, *awsRequest) {
   var args = &route53.ListResourceRecordSetsInput{
     HostedZoneId: aws.String(zoneId),
     //using the following doesn't work... we'll just filter in memory (*sigh*)
@@ -73,9 +73,8 @@ func GetRecordsetsForZone(svc *route53.Route53, zoneId string) (*zoneRs, *awsReq
   var moreRecords bool = true
   var resp *route53.ListResourceRecordSetsOutput
   req := new(awsRequest)
-  zoneRecordsets := new(zoneRs)
+  zoneRecordset := make(recordset)
 
-  zoneRecordsets.types = make(map[string][]*rs)
   //init request metadata
   req.serviceName = "route53"
   req.serviceFunction = "ListResourceRecordSets"
@@ -86,7 +85,7 @@ func GetRecordsetsForZone(svc *route53.Route53, zoneId string) (*zoneRs, *awsReq
     resp, req.err = svc.ListResourceRecordSets(args)
     req.HandleServiceRequestError()
     //in-memory filter
-    zoneRecordsets.HashRecordsetTypes(resp.ResourceRecordSets)
+    zoneRecordset.HashRecordsetTypes(resp.ResourceRecordSets)
     if resp != nil && *resp.IsTruncated {
       args.SetStartRecordName(*resp.NextRecordName)
       moreRecords = true
@@ -95,14 +94,15 @@ func GetRecordsetsForZone(svc *route53.Route53, zoneId string) (*zoneRs, *awsReq
     }
   }
 
-  return zoneRecordsets, req
+  //don't pass what could be a massive amount of data, just the reference
+  return &zoneRecordset, req
 }
 
 /*
  *  custom bubble sort for hosted zones; can sort by the domain or tld field for
  *  an array of hosted zones
  */
-func HzSort(domainContainers []*hz, sortTarget string) {
+func HzSort(domainContainers []*zone, sortTarget string) {
   var sorted bool = false
 
   for !sorted {
@@ -149,7 +149,7 @@ func HzSort(domainContainers []*hz, sortTarget string) {
  * represent an array of domains (hz structs) as a serialized json object
  * should this be a method on a type of []*hz?
  */
-func SerializeHostedZones(zones []*hz) string {
+func SerializeHostedZones(zones []*zone) string {
   var jsonString strings.Builder
 
   jsonString.WriteString("{\"domains\":[")
@@ -166,16 +166,16 @@ func SerializeHostedZones(zones []*hz) string {
 }
 
 /*
- * represent an array of domain recordsets (rs structs) as a serialized json
- * object should this be a method on a type of []*rs?
+ * represent an array of domain recordsets (record structs) as a serialized json
+ * object should this be a method on a type of []*record?
  */
-func SerializeRecordsets(recordsets []*rs) string {
+func SerializeRecordsets(records []*record) string {
   var jsonString strings.Builder
 
   jsonString.WriteString("{\"resourceRecords\":[")
-  for i, recordset := range recordsets {
-    jsonString.WriteString(recordset.Serialize())
-    if i < len(recordsets) - 1 {
+  for i, content := range records {
+    jsonString.WriteString(content.Serialize())
+    if i < len(records) - 1 {
       jsonString.WriteString(",")
     }
   }
@@ -259,9 +259,9 @@ func main() {
         os.Exit(0)
       }
 
-      if len(zoneRecords.types[strings.ToUpper(resourceRecord)]) > 0 {
-        fmt.Printf("found %d records:\n", len(zoneRecords.types[strings.ToUpper(resourceRecord)]))
-        for _, record := range zoneRecords.types[strings.ToUpper(resourceRecord)] {
+      if len((*zoneRecords)[strings.ToUpper(resourceRecord)]) > 0 {
+        fmt.Printf("found %d records:\n", len((*zoneRecords)[strings.ToUpper(resourceRecord)]))
+        for _, record := range (*zoneRecords)[strings.ToUpper(resourceRecord)] {
           fmt.Printf("%s\n", record.name)
           for _, value := range record.values {
             fmt.Printf("\t%s\n", value)
@@ -284,7 +284,7 @@ func main() {
       //--domain content checks
       if len(domainId) > 0 {
         zoneRecords, _ := GetRecordsetsForZone(route53svc, domainId)
-        aRecordsForDomain := zoneRecords.types["A"]
+        aRecordsForDomain := (*zoneRecords)["A"]
         batch := make(chan string, len(aRecordsForDomain))
         for i:=0; i<len(aRecordsForDomain); i++ {
           go ChanneledParseSite(aRecordsForDomain[i].name, batch)
@@ -309,7 +309,7 @@ func main() {
         fmt.Println(SerializeHostedZones(zones))
       } else if len(domainId) > 0 && len(resourceRecord) > 0 {
         zoneRecords, _ := GetRecordsetsForZone(route53svc, domainId)
-        fmt.Println(SerializeRecordsets(zoneRecords.types[strings.ToUpper(resourceRecord)]))
+        fmt.Println(SerializeRecordsets((*zoneRecords)[strings.ToUpper(resourceRecord)]))
       } else {
         fmt.Println("insufficient arguments, when information gathering:\n" +
                     "\tno additional arguments: outputs hosted zones\n" +

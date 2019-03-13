@@ -8,34 +8,31 @@ import(
 )
 
 /*
- *  hosted zone container
- *    holds easy to reference data about found hosted zones
- *    methods below
+ *  zone container - holds easy to reference data about dns zones
  */
-type hz struct {
+type zone struct {
   domain string
   id string
   recordCount int64
   tld string
 }
-//pretty print hz's domain name
-func (container *hz) DomainToString() string {
-  if len(container.tld) > 0 {
-    return container.domain + "." + container.tld
+func (z *zone) DomainToString() string {
+  if len(z.tld) > 0 {
+    //only print domain and tld if we have a tld
+    return z.domain + "." + z.tld
   } else {
-    return container.domain
+    return z.domain
   }
 }
-//packaging for container contents
-func (container *hz) Serialize() string {
+func (z *zone) Serialize() string {
   var jsonString strings.Builder
 
   //there's got to be a better way...
   jsonString.WriteString("{")
-  jsonString.WriteString("\"id\":\"" + container.id + "\",")
-  jsonString.WriteString("\"domain\":\"" + container.domain + "\",")
-  jsonString.WriteString("\"tld\":\"" + container.tld + "\",")
-  jsonString.WriteString("\"recordCount\":" + strconv.FormatInt(container.recordCount, 10))
+  jsonString.WriteString("\"id\":\"" + z.id + "\",")
+  jsonString.WriteString("\"domain\":\"" + z.domain + "\",")
+  jsonString.WriteString("\"tld\":\"" + z.tld + "\",")
+  jsonString.WriteString("\"recordCount\":" + strconv.FormatInt(z.recordCount, 10))
   jsonString.WriteString("}")
 
   return jsonString.String()
@@ -43,29 +40,28 @@ func (container *hz) Serialize() string {
 
 
 /*
- *  resource recordset container
- *    recordset => name/value pair (value is an array)
- *    methods below
+ *  dns record - resource name/values pair
+ *  note: values is an array
+ *        there is also a reference back to the zone
  */
-type rs struct {
+type record struct {
   name string
   isAlias bool
-  hzRef string
+  zoneRef string
   values []string
 }
-//packaging for container contents
-func (container *rs) Serialize() string {
+func (r *record) Serialize() string {
   var jsonString strings.Builder
 
   jsonString.WriteString("{")
-  jsonString.WriteString("\"name\":\"" + container.name + "\",")
-  jsonString.WriteString("\"isAlias\":" + strconv.FormatBool(container.isAlias) + ",")
-  //don't include if the hzRef field is blank/empty
-  if len(container.hzRef) > 0 {
-    jsonString.WriteString("\"hostedZoneReference\":\"" + container.hzRef + "\",")
+  jsonString.WriteString("\"name\":\"" + r.name + "\",")
+  jsonString.WriteString("\"isAlias\":" + strconv.FormatBool(r.isAlias) + ",")
+  //don't include if the zoneRef field is blank/empty
+  if len(r.zoneRef) > 0 {
+    jsonString.WriteString("\"zoneReference\":\"" + r.zoneRef + "\",")
   }
 
-  jsonString.WriteString("\"values\":[\"" + strings.Join(container.values, "\",\"") + "\"]")
+  jsonString.WriteString("\"values\":[\"" + strings.Join(r.values, "\",\"") + "\"]")
   jsonString.WriteString("}")
 
   return jsonString.String()
@@ -73,30 +69,30 @@ func (container *rs) Serialize() string {
 
 
 /*
- *  container for multiple resource recordsets
- *    needs work
+ *  container for many dns records
+ *  map key is the dns record type (resource record type)
+ *  map value is an array of record structs
  */
-type zoneRs struct {
-  types map[string][]*rs
-}
-func (zr *zoneRs) GetDistinctTypes() []string {
-  var distinceTypes []string = make([]string, len(zr.types))
+type recordset map[string][]*record
+func (rset *recordset) GetDistinctTypes() []string {
+  var distinceTypes []string = make([]string, len(*rset))
   var i int = 0
 
-  for resourceRecordType, _ := range zr.types {
+  for resourceRecordType, _ := range *rset {
     distinceTypes[i] = resourceRecordType
     i++
   }
 
   return distinceTypes
 }
-//using the result returned from the aws api call to list resource recordsets,
-//assemble a hash of recordset types
-func (zr *zoneRs) HashRecordsetTypes(recordsets []*route53.ResourceRecordSet) {
+/*
+ *  hash api call's response of resource records into a map of dns record types
+ */
+func (rset *recordset) HashRecordsetTypes(recordsets []*route53.ResourceRecordSet) {
   //for each recordset returned...
   for _, recordset := range recordsets {
     var recordvals strings.Builder
-    currentRecordset := new(rs)
+    currentRecordset := new(record)
 
     //lop off the dot at the end of the recordset name
     currentRecordset.name = string(*recordset.Name)[:len(*recordset.Name)-1]
@@ -112,11 +108,11 @@ func (zr *zoneRs) HashRecordsetTypes(recordsets []*route53.ResourceRecordSet) {
       //handle an alias target
       currentRecordset.isAlias = true
       recordvals.WriteString(*recordset.AliasTarget.DNSName)
-      currentRecordset.hzRef = *recordset.AliasTarget.HostedZoneId
+      currentRecordset.zoneRef = *recordset.AliasTarget.HostedZoneId
     }
 
     currentRecordset.values = strings.Split(recordvals.String(), ",")
     //add recordset to the correct type bucket
-    zr.types[*recordset.Type] = append(zr.types[*recordset.Type], currentRecordset)
+    (*rset)[*recordset.Type] = append((*rset)[*recordset.Type], currentRecordset)
   }
 }
