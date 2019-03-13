@@ -38,6 +38,26 @@ func (z *zone) Serialize() string {
   return jsonString.String()
 }
 
+/*
+ * Function that serializes an array of zone references.
+ * loosely associated with zone type
+ */
+func SerializeZones(zones []*zone) string {
+  var jsonString strings.Builder
+
+  jsonString.WriteString("{\"zones\":[")
+  for i, zone := range zones {
+    jsonString.WriteString(zone.Serialize())
+    if i < len(zones) - 1 {
+      jsonString.WriteString(",")
+    }
+  }
+
+  jsonString.WriteString("]}")
+
+  return jsonString.String()
+}
+
 
 /*
  *  dns record - resource name/values pair

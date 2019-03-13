@@ -66,11 +66,55 @@ func TestZoneSerialize(t *testing.T) {
 }
 
 func TestRecordSerialize(t *testing.T) {
+  var jsonObject map[string]interface{}
   r := new(record)
-  tc1 := r.Serialize()
 
-  if !json.Valid([]byte(tc1)) {
-    t.Errorf("tc1 - invalid JSON: %s", tc1)
+  //test cases
+  //  1: serialize function returns valid json
+  //  2: key: "zoneRef" should not appear in the serialized string if not specified in the struct
+  serialized := r.Serialize()
+  json.Unmarshal([]byte(serialized), &jsonObject)
+
+  if !json.Valid([]byte(serialized)) {
+    t.Errorf("tc1 - invalid JSON: %s", serialized)
+  }
+
+  if jsonObject["zoneRef"] != nil {
+    t.Errorf("tc2 - key \"zoneRef\" (not specified in record instance) was not expected: %s", serialized)
+  }
+}
+
+func TestSerializeZones(t *testing.T) {
+  var jsonObject map[string][]*record
+  z0 := &zone{
+    domain: "maindomain",
+    id: "20a4b",
+    tld: "us",
+  }
+  z1 := &zone{
+    domain: "support.maindomain",
+    id: "20a5c",
+    tld: "us",
+  }
+  zones := make([]*zone, 2)
+
+  zones[0] = z0
+  zones[1] = z1
+
+  //test cases
+  //  1: serialize function returns valid json
+  //  2: key: "zones" exist and has the expected length
+  //
+  //SerializeZones() will fail if the slice has nil elements (should we test for this?)
+  serialized := SerializeZones(zones)
+  json.Unmarshal([]byte(serialized), &jsonObject)
+
+  if !json.Valid([]byte(serialized)) {
+    t.Errorf("tc1 - invalid JSON: %s", serialized)
+  }
+
+  if jsonObject["zones"] == nil || len(jsonObject["zones"]) != 2 {
+    t.Errorf("tc2 - expected key, \"zones\" is missing or has the wrong number of elements: %+v", jsonObject)
   }
 }
 

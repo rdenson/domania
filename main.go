@@ -145,26 +145,6 @@ func HzSort(domainContainers []*zone, sortTarget string) {
   } //end sort iteration
 }
 
-/*
- * represent an array of domains (hz structs) as a serialized json object
- * should this be a method on a type of []*hz?
- */
-func SerializeHostedZones(zones []*zone) string {
-  var jsonString strings.Builder
-
-  jsonString.WriteString("{\"domains\":[")
-  for i, zone := range zones {
-    jsonString.WriteString(zone.Serialize())
-    if i < len(zones) - 1 {
-      jsonString.WriteString(",")
-    }
-  }
-
-  jsonString.WriteString("]}")
-
-  return jsonString.String()
-}
-
 //request metadata container
 type awsRequest struct {
   serviceName string
@@ -286,7 +266,7 @@ func main() {
       //--information gathering
       if len(domainId) == 0 {
         zones, _ := GetHostedZones(route53svc, &route53.ListHostedZonesInput{})
-        fmt.Println(SerializeHostedZones(zones))
+        fmt.Println(SerializeZones(zones))
       } else if len(domainId) > 0 && len(resourceRecord) > 0 {
         zoneRecords, _ := GetRecordsetsForZone(route53svc, domainId)
         fmt.Println(zoneRecords.SerializeRecords(resourceRecord))
