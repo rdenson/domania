@@ -165,26 +165,6 @@ func SerializeHostedZones(zones []*zone) string {
   return jsonString.String()
 }
 
-/*
- * represent an array of domain recordsets (record structs) as a serialized json
- * object should this be a method on a type of []*record?
- */
-func SerializeRecordsets(records []*record) string {
-  var jsonString strings.Builder
-
-  jsonString.WriteString("{\"resourceRecords\":[")
-  for i, content := range records {
-    jsonString.WriteString(content.Serialize())
-    if i < len(records) - 1 {
-      jsonString.WriteString(",")
-    }
-  }
-
-  jsonString.WriteString("]}")
-
-  return jsonString.String()
-}
-
 //request metadata container
 type awsRequest struct {
   serviceName string
@@ -309,7 +289,7 @@ func main() {
         fmt.Println(SerializeHostedZones(zones))
       } else if len(domainId) > 0 && len(resourceRecord) > 0 {
         zoneRecords, _ := GetRecordsetsForZone(route53svc, domainId)
-        fmt.Println(SerializeRecordsets((*zoneRecords)[strings.ToUpper(resourceRecord)]))
+        fmt.Println(zoneRecords.SerializeRecords(resourceRecord))
       } else {
         fmt.Println("insufficient arguments, when information gathering:\n" +
                     "\tno additional arguments: outputs hosted zones\n" +

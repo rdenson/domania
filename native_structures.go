@@ -116,3 +116,19 @@ func (rset *recordset) HashRecordsetTypes(recordsets []*route53.ResourceRecordSe
     (*rset)[*recordset.Type] = append((*rset)[*recordset.Type], currentRecordset)
   }
 }
+func (rset *recordset) SerializeRecords(recordType string) string {
+  var specificRecords = (*rset)[strings.ToUpper(recordType)]
+  var jsonString strings.Builder
+
+  jsonString.WriteString("{\"zoneRecords\":[")
+  for i, rec := range specificRecords {
+    jsonString.WriteString(rec.Serialize())
+    if i < len(specificRecords) - 1 {
+      jsonString.WriteString(",")
+    }
+  }
+
+  jsonString.WriteString("]}")
+
+  return jsonString.String()
+}
