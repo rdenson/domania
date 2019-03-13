@@ -68,11 +68,11 @@ func TestFormatUrl(t *testing.T) {
   tc5 := FormatUrl("https://host.com", false)
 
   if len(tc1) == 0 || tc1[0:7] != "http://" {
-    t.Errorf("tc1 - expected \"http://host.com\", recieved: \"%s\"", tc1)
+    t.Errorf("tc1 - expected \"http://host.com\", received: \"%s\"", tc1)
   }
 
   if len(tc2) == 0 || tc2[0:8] != "https://" {
-    t.Errorf("tc2 - expected \"http://host.com\", recieved: \"%s\"", tc2)
+    t.Errorf("tc2 - expected \"http://host.com\", received: \"%s\"", tc2)
   }
 
   if len(tc3) != 0 {
