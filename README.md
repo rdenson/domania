@@ -1,3 +1,5 @@
+[![Build Status](https://api.travis-ci.org/rdenson/domania.png?branch=master)](https://travis-ci.org/rdenson/domania)
+
 # Domania
 ## Portable Cloud Domain Inspection
 There are quite a few domains and associated record sets that require my care. I
